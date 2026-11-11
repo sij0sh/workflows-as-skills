@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -81,6 +82,21 @@ class FlowTest(unittest.TestCase):
         self.stage(c)
         self.advance(c)
         return c
+
+    def test_show_discloses_references_by_phase(self):
+        c = candidate()
+        self.stage(c)
+        draft = self.cli()
+        self.assertIn('boundaries.md', draft.stdout)
+        self.assertNotIn('authoring.md', draft.stdout)
+        self.cli('done', self.s['ticket'], data=c)
+        self.s = self.stored()
+        review_out = self.cli()
+        self.assertIn('boundaries.md', review_out.stdout)
+        self.assertIn('authoring.md', review_out.stdout)
+        resolve_out = self.cli('done', self.s['ticket'], data=flow.NEED)
+        self.assertNotIn('boundaries.md', resolve_out.stdout)
+        self.assertNotIn('authoring.md', resolve_out.stdout)
 
     def test_bare_resume_without_state_has_no_side_effects(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -598,9 +614,11 @@ class FlowTest(unittest.TestCase):
 class SurfaceTest(unittest.TestCase):
     def test_instruction_budgets(self):
         body = (REPO / 'SKILL.md').read_text().split('---\n', 2)[2]
-        self.assertLessEqual(len(body.split()), 100)
+        self.assertLessEqual(len(body.split()), 60)
+        self.assertEqual(len(re.findall(r'[.!?](?=\s+[A-Z]|$)', body)), 2)
+        self.assertIn('printed staging directory', body)
         for path in (REPO / 'references').glob('*.md'):
-            self.assertLessEqual(len(path.read_text().split()), 350, str(path))
+            self.assertLessEqual(len(path.read_text().split()), 220, str(path))
         contracts = {'draft': [flow.CANDIDATE, flow.NEED, {'boundary': flow.BOUNDARY,
                       'loop': flow.LOOP, 'decision': flow.DECISION}],
                      'review': [flow.PASS, {'status': 'revise', 'gaps': [flow.GAP]}, flow.NEED],
@@ -611,6 +629,37 @@ class SurfaceTest(unittest.TestCase):
             self.assertLessEqual(words, 400, name)
         self.assertLessEqual(len((REPO / 'references/engine-template.py').read_text().splitlines()), 120)
         self.assertIn('disable-model-invocation: true', (REPO / 'SKILL.md').read_text())
+
+    def test_reference_content_covers_design(self):
+        boundaries = (REPO / 'references/boundaries.md').read_text()
+        for choice in ('One-pass prose', 'Linear phases', 'Persistent engine',
+                       'Judgment loop', 'Conditional resolution', 'Approval/effect gate'):
+            self.assertIn(choice, boundaries)
+        for lens in flow.LENSES:
+            self.assertIn(lens, boundaries)
+        for condition in ('closure check', 'handoff', 'failure witness', 'earliest rewind',
+                          'exit', 'invalidation', 'budget', 'exhaustion'):
+            self.assertIn(condition, boundaries)
+        authoring = (REPO / 'references/authoring.md').read_text()
+        for kind in ('Semantic', 'Evaluative', 'Mechanical'):
+            self.assertIn(kind, authoring)
+        self.assertIn('not a generic runner', authoring)
+
+    def test_prompt_reference_disclosure_and_ownership(self):
+        draft = flow.PROMPTS['draft']
+        self.assertIn('boundaries.md', draft)
+        self.assertIn('intent/authority', draft)
+        self.assertIn('Python reference template', draft)
+        for excluded in ('authoring.md', 'Read both references', 'Start one-pass',
+                         'five lenses', 'engine none', 'generic runner'):
+            self.assertNotIn(excluded, draft)
+        review_prompt = flow.PROMPTS['review']
+        self.assertIn('boundaries.md', review_prompt)
+        self.assertIn('authoring.md', review_prompt)
+        self.assertIn('defeat or coverage_checks', review_prompt)
+        resolve_prompt = flow.PROMPTS['resolve']
+        self.assertNotIn('boundaries.md', resolve_prompt)
+        self.assertNotIn('authoring.md', resolve_prompt)
 
     def test_packaged_skill_passes_its_own_file_contract(self):
         import shutil

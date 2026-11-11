@@ -1,38 +1,18 @@
-# Smallest viable workflow
+# Workflow shape
 
-Start with one pass. Size by uncertainty, dependencies, context pressure, consequences,
-reversibility, and verification limits—not request length. Record evidence and assumptions.
+Start one-pass. Size by uncertainty, dependencies, context pressure, consequences, reversibility, verification—not length.
 
-Choose independently:
-
-| Choice | Benefit | Cost / justification |
+| Choice | Use when | Cost |
 |---|---|---|
-| One-pass prose | Minimal overhead | Weak recovery; sufficient when intent is stable and output directly checkable |
-| Linear phases | Closed decisions and focused context | Handoffs and stale results; need a concrete merge-failure witness |
-| Persistent engine | Resume and guarded transitions | Code, tests, recovery; compaction or authority must justify it |
-| Judgment loop | Correct falsifiable judgments | Latency, churn, correlated blindness; needs evidence, exit, rewind, invalidation, budget, exhaustion |
-| Conditional resolution | Avoid unsafe guesses | Interruption; only material intent/fact gaps |
-| Approval/effect gate | Bound irreversible effects | User friction; approval does not prove correctness |
+| One-pass prose | intent stable; output directly checkable | weak recovery |
+| Linear phases | a later choice needs an earlier result, authority gate, or context | handoffs, stale results |
+| Persistent engine | resume/compaction or guarded transitions | code, tests, recovery |
+| Judgment loop | a material judgment may be false and falsifiable | latency, churn, correlated blindness |
+| Conditional resolution | material user intent or unsafe fact gap blocks progress | interruption |
+| Approval/effect gate | irreversible or harmful effects need permission | user friction; not correctness |
 
-Split by decision, not activity. Each phase states entering context, closure/result,
-outgoing context, and discarded context. Each consequential boundary records:
-**how** closure is checked; **where** the handoff/context changes; **why** a concrete
-failure requires the split, including merge/move cost; **rewind** earliest affected phase.
-One phase and zero inter-phase boundaries are valid.
+Phases are task-derived; one phase and zero boundaries are valid. Each phase states enter, close, leave, discard context. Each consequential boundary states its closure check, handoff, concrete failure witness and earliest rewind. Each loop states exit, evidence, earliest rewind, invalidation, budget and exhaustion.
 
-Check five diagnostic lenses, not mandatory stages:
-exploration/commitment; decision/implementation; evidence/inference;
-resolved/unresolved; author/critic. Address inline, with checks, with phases, or explain absence.
-Prompt separation is not reviewer independence.
+Five lenses, not stages: exploration/commitment; decision/implementation; evidence/inference; resolved/unresolved; author/critic. Address each inline, with a check, with a phase, or by explaining absence.
 
-Challenge in both directions. Remove each phase, merge neighbors, remove loops/engine;
-adopt any simpler adequate variant. Then construct a difficult in-scope case that passes
-checks but violates the goal or authority. Use exact instructions, paired examples, or
-executed negative controls. A removed guard must make an invariant test fail.
-
-Deterministic checks rarely need judgment loops. Local repetition cannot establish missing
-safety evidence. Block or seek suitable verification instead.
-
-Examples, not presets: formatting advice needs prose; resumable conversion may need a
-linear engine without critique; ambiguous design may need bounded challenge; a brief
-production migration can need separate authority and verification gates.
+Challenge: remove phases, merge neighbors, remove loops/engine; adopt any simpler adequate variant. Construct a difficult in-scope case that passes checks but violates goal or authority. Local review is not independence; block or verify unsafe unknowns.
