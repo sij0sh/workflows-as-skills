@@ -29,13 +29,22 @@ def candidate(mode='none', phases=('format',)):
     return c
 
 
-def review(c):
+def review(c, resolved=()):
     r = deepcopy(flow.PASS)
     r['subtract'] = [{**flow.CHECK, 'choice': choice} for choice in flow.choices(c)]
+    r['resolved'] = [{**flow.RESOLVED, 'id': i} for i in resolved]
     return r
 
 
-class FlowTest(unittest.TestCase):
+def gap(rewind, id='G1', novel=True):
+    return {**flow.GAP, 'id': id, 'novel': novel, 'rewind': rewind}
+
+
+def revise(*gaps):
+    return {**flow.REVISE, 'gaps': list(gaps)}
+
+
+class Harness(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -83,6 +92,8 @@ class FlowTest(unittest.TestCase):
         self.advance(c)
         return c
 
+
+class FlowTest(Harness):
     def test_show_discloses_references_by_phase(self):
         c = candidate()
         self.stage(c)
@@ -93,7 +104,7 @@ class FlowTest(unittest.TestCase):
         self.s = self.stored()
         review_out = self.cli()
         self.assertIn('boundaries.md', review_out.stdout)
-        self.assertIn('authoring.md', review_out.stdout)
+        self.assertNotIn('authoring.md', review_out.stdout)
         resolve_out = self.cli('done', self.s['ticket'], data=flow.NEED)
         self.assertNotIn('boundaries.md', resolve_out.stdout)
         self.assertNotIn('authoring.md', resolve_out.stdout)
@@ -143,9 +154,10 @@ class FlowTest(unittest.TestCase):
 
     def test_single_file_linear_trial_without_loop(self):
         c = candidate('single-file', ('scan', 'convert'))
-        c['workflow']['boundaries'] = [{'id': 'B1', 'how': 'Source hash captured before conversion.',
-            'where': 'scan hands source/hash to convert; discard exploratory logs.',
-            'why': 'Merging permits a changed source to use stale evidence.', 'rewind': 'scan'}]
+        c['workflow']['boundaries'] = [{'id': 'B1', 'signal': 'verification',
+            'handoff': 'scan hands source/hash to convert; discard exploratory logs.',
+            'merged_loss': 'Merging permits a changed source to use stale evidence.',
+            'check': 'Source hash captured before conversion.', 'rewind': 'scan'}]
         path = self.stage(c)
         result = subprocess.run([sys.executable, '-B', '-m', 'unittest', 'discover', '-s', 'tests'],
                                 cwd=path, capture_output=True, text=True)
@@ -158,6 +170,7 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.s['phase'], 'complete')
         self.assertIn('"test_run": {', (self.root / self.s['record']).read_text())
         self.assertIn('engine', flow.choices(c))
+        self.assertIn('boundary:B1', flow.choices(c))
         self.assertEqual(c['workflow']['loops'], [])
 
     def test_judgment_loop_and_high_consequence_shapes(self):
@@ -196,6 +209,36 @@ class FlowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             flow.candidate(c)
 
+    def test_loop_kinds_scope_perspectives(self):
+        c = candidate_with_loop()
+        c['workflow']['loops'] = [{**flow.EVALUATION, 'entry': 'attack', 'rewind': 'propose'}]
+        flow.candidate(c)
+        for bad in ([], ['same', 'same']):
+            c['workflow']['loops'][0]['perspectives'] = bad
+            with self.assertRaises(ValueError):
+                flow.candidate(c)
+        c = candidate_with_loop()
+        for bad in ({'perspectives': ['ritual']}, {'kind': 'repeat'}):
+            loop = {**c['workflow']['loops'][0], **bad}
+            c['workflow']['loops'] = [loop]
+            with self.assertRaises(ValueError):
+                flow.candidate(c)
+
+    def test_boundary_signal_and_gate_phase_validated(self):
+        c = candidate(phases=('inspect', 'apply'))
+        c['workflow']['boundaries'] = [{**flow.BOUNDARY, 'signal': 'verification', 'rewind': 'inspect'}]
+        c['workflow']['gates'] = [{**flow.GATE, 'phase': 'apply'}]
+        flow.candidate(c)
+        for broken in ({'signal': 'habit'}, {'merged_loss': ''}):
+            bad = deepcopy(c)
+            bad['workflow']['boundaries'][0].update(broken)
+            with self.assertRaises(ValueError):
+                flow.candidate(bad)
+        bad = deepcopy(c)
+        bad['workflow']['gates'][0]['phase'] = 'publish'
+        with self.assertRaises(ValueError):
+            flow.candidate(bad)
+
     def test_decision_basis_labeled_and_revisit_required(self):
         c = candidate()
         c['workflow']['decisions'] = [{**flow.DECISION, 'basis': 'assumed: stable intent'}]
@@ -208,14 +251,14 @@ class FlowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             flow.candidate(c)
 
-    def test_missing_subtraction_or_lens_rejected(self):
+    def test_missing_subtraction_or_perspective_rejected(self):
         c = self.draft(candidate(phases=('extract', 'format')))
-        for kind in ('subtract', 'coverage_checks'):
+        for kind in ('subtract', 'perspective'):
             r = review(c)
             if kind == 'subtract':
                 r[kind].pop()
             else:
-                r[kind].pop(flow.LENSES[0])
+                r[kind] = ''
             self.cli('done', self.s['ticket'], data=r, ok=False)
             self.assertEqual(self.stored()['phase'], 'review')
 
@@ -249,7 +292,7 @@ class FlowTest(unittest.TestCase):
         c = self.draft()
         old = self.root / self.s['stage']
         for turn in range(3):
-            self.advance({'status': 'revise', 'gaps': [{**flow.GAP, 'rewind': 'format'}]})
+            self.advance(revise(gap('format', f'G{turn}')))
             self.assertEqual(self.s['attempts'], turn + 1)
             if turn < 2:
                 self.assertEqual(self.s['phase'], 'draft')
@@ -262,7 +305,7 @@ class FlowTest(unittest.TestCase):
 
     def test_invalid_rewind_does_not_change_state(self):
         self.draft()
-        self.cli('done', self.s['ticket'], data={'status': 'revise', 'gaps': [flow.GAP]}, ok=False)
+        self.cli('done', self.s['ticket'], data=revise(gap('made-up')), ok=False)
         self.assertEqual(self.stored()['attempts'], 0)
 
     def test_resolve_blocked_and_rebuild_without_budget_cost(self):
@@ -450,13 +493,12 @@ class FlowTest(unittest.TestCase):
     def test_rewind_retains_candidate_and_orders_earliest_gap(self):
         c = self.draft(candidate(phases=('inspect', 'convert', 'verify')))
         old_stage = self.s['stage']
-        self.advance({'status': 'revise', 'gaps': [
-            {**flow.GAP, 'rewind': 'verify'}, {**flow.GAP, 'rewind': 'inspect'}]})
+        self.advance(revise(gap('verify', 'G1'), gap('inspect', 'G2')))
         self.assertEqual(self.s['previous'], {'candidate': c, 'stage': old_stage})
         self.assertEqual(self.s['feedback'][0]['rewind'], 'inspect')
         self.cli()  # Saved context must remain resumable.
         c2 = self.draft(c)
-        self.advance(review(c2))
+        self.advance(review(c2, ('G1', 'G2')))
         self.assertIsNone(self.s['previous'])
         self.assertIn(old_stage, (self.root / self.s['record']).read_text())
 
@@ -520,7 +562,7 @@ class FlowTest(unittest.TestCase):
 
     def test_resolution_after_topology_revision_has_no_stale_rewind(self):
         self.draft(candidate(phases=('inspect', 'convert')))
-        self.advance({'status': 'revise', 'gaps': [{**flow.GAP, 'rewind': 'inspect'}]})
+        self.advance(revise(gap('inspect')))
         self.draft(candidate(phases=('answer',)))
         self.advance(flow.NEED)
         self.assertEqual(self.s['phase'], 'resolve')
@@ -619,9 +661,9 @@ class SurfaceTest(unittest.TestCase):
         self.assertIn('printed staging directory', body)
         for path in (REPO / 'references').glob('*.md'):
             self.assertLessEqual(len(path.read_text().split()), 220, str(path))
-        contracts = {'draft': [flow.CANDIDATE, flow.NEED, {'boundary': flow.BOUNDARY,
-                      'loop': flow.LOOP, 'decision': flow.DECISION}],
-                     'review': [flow.PASS, {'status': 'revise', 'gaps': [flow.GAP]}, flow.NEED],
+        contracts = {'draft': [flow.CANDIDATE, flow.NEED, {'boundary': flow.BOUNDARY, 'gate': flow.GATE,
+                      'loop': flow.LOOP, 'evaluation_loop': flow.EVALUATION, 'decision': flow.DECISION}],
+                     'review': [flow.PASS, flow.REVISE, flow.NEED],
                      'resolve': [{'status': 'resolved', 'answer': 'text', 'basis': 'text'},
                                  {'status': 'blocked', 'question': 'text', 'needs': 'text'}]}
         for name, prompt in flow.PROMPTS.items():
@@ -635,15 +677,13 @@ class SurfaceTest(unittest.TestCase):
         for choice in ('One-pass prose', 'Linear phases', 'Persistent engine',
                        'Judgment loop', 'Conditional resolution', 'Approval/effect gate'):
             self.assertIn(choice, boundaries)
-        for lens in flow.LENSES:
-            self.assertIn(lens, boundaries)
-        for condition in ('closure check', 'handoff', 'failure witness', 'earliest rewind',
-                          'exit', 'invalidation', 'budget', 'exhaustion'):
-            self.assertIn(condition, boundaries)
-        authoring = (REPO / 'references/authoring.md').read_text()
-        for kind in ('Semantic', 'Evaluative', 'Mechanical'):
-            self.assertIn(kind, authoring)
-        self.assertIn('not a generic runner', authoring)
+        for phrase in ('Boundary test', 'Continuation test', 'Termination test',
+                       'what would be lost if performed together', 'closure check', 'handoff',
+                       'earliest rewind', 'safety cap', 'Exhaustion', 'zero findings is not proof'):
+            self.assertIn(phrase, boundaries)
+        for signal in flow.SIGNALS:
+            self.assertIn(signal, boundaries)
+        self.assertFalse((REPO / 'references/authoring.md').exists())
 
     def test_prompt_reference_disclosure_and_ownership(self):
         draft = flow.PROMPTS['draft']
@@ -653,10 +693,12 @@ class SurfaceTest(unittest.TestCase):
         for excluded in ('authoring.md', 'Read both references', 'Start one-pass',
                          'five lenses', 'engine none', 'generic runner'):
             self.assertNotIn(excluded, draft)
+        self.assertIn('semantic-instructions', draft)
         review_prompt = flow.PROMPTS['review']
         self.assertIn('boundaries.md', review_prompt)
-        self.assertIn('authoring.md', review_prompt)
-        self.assertIn('defeat or coverage_checks', review_prompt)
+        self.assertNotIn('authoring.md', review_prompt)
+        for phrase in ('perspective', 'ledger gap', 'lost if merged', 'approval gate', 'not proof'):
+            self.assertIn(phrase, review_prompt)
         resolve_prompt = flow.PROMPTS['resolve']
         self.assertNotIn('boundaries.md', resolve_prompt)
         self.assertNotIn('authoring.md', resolve_prompt)
@@ -670,9 +712,9 @@ class SurfaceTest(unittest.TestCase):
             for name in ('scripts', 'references', 'tests'):
                 shutil.copytree(REPO / name, path / name, ignore=shutil.ignore_patterns('__pycache__'))
             c = candidate('single-file')
-            c['frame'].update(name='workflows-as-skills', description=(
-                'Create and publish an explicitly invoked agent skill from a request. '
-                'Synthesize the smallest viable task-specific workflow, with optional phases, persistence, and challenge loops.'))
+            front = (REPO / 'SKILL.md').read_text().split('---\n')[1]
+            description = re.search(r'^description: (.*)$', front, re.M).group(1)
+            c['frame'].update(name='workflows-as-skills', description=description)
             flow.skill_tree(path, c)
 
     def test_template_verifies_count_and_refuses_stale_result(self):
@@ -732,6 +774,90 @@ class SurfaceTest(unittest.TestCase):
                                      'done', 'stale-ticket'], input=json.dumps(flow.NEED),
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 1)
+
+
+class LedgerTest(Harness):
+    def test_pass_must_cite_every_ledger_gap(self):
+        c = self.draft()
+        self.advance(revise(gap('format', 'G1')))
+        c = self.draft(c)
+        self.cli('done', self.s['ticket'], data=review(c), ok=False)
+        self.cli('done', self.s['ticket'], data=review(c, ('G1', 'G9')), ok=False)
+        self.assertEqual(self.stored()['phase'], 'review')
+        self.advance(review(c, ('G1',)))
+        self.assertEqual(self.s['phase'], 'complete')
+
+    def test_novelty_must_match_ledger(self):
+        c = self.draft()
+        self.advance(revise(gap('format', 'G1')))
+        self.draft(c)
+        for bad in (gap('format', 'G1'), gap('format', 'G2', novel=False)):
+            self.cli('done', self.s['ticket'], data=revise(bad), ok=False)
+        self.assertEqual(self.stored()['attempts'], 1)
+
+    def test_repeated_gap_ends_incomplete_with_unresolved(self):
+        c = self.draft()
+        self.advance(revise(gap('format', 'G1')))
+        self.draft(c)
+        self.advance({**revise(gap('format', 'G1', novel=False)), 'perspective': 'same class'})
+        self.assertEqual(self.s['phase'], 'incomplete')
+        self.assertEqual(self.s['attempts'], 2)
+        record = (self.root / self.s['record']).read_text()
+        self.assertIn('## Unresolved', record)
+        self.assertIn('- G1:', record)
+        self.assertFalse((self.root / '.agents/skills/test-skill').exists())
+
+    def negative_control(self, function, guard, run):
+        import inspect
+        source = inspect.getsource(function)
+        self.assertIn(guard, source)
+        run(function)
+        namespace = dict(vars(flow))
+        exec(source.replace(guard, 'pass  # negative control'), namespace)
+        with self.assertRaises(AssertionError):
+            run(namespace[function.__name__])
+
+    def test_negative_control_ledger_citation_guard(self):
+        c = candidate()
+        def run(validator):
+            with self.assertRaises(ValueError):
+                validator(review(c), c, ['G1'])
+        self.negative_control(flow.review, "require(set(cited) == set(ledger), "
+                              "'pass must cite every ledger gap as resolved')", run)
+
+    def test_negative_control_boundary_signal_guard(self):
+        c = candidate(phases=('inspect', 'apply'))
+        c['workflow']['boundaries'] = [{**flow.BOUNDARY, 'signal': 'habit', 'rewind': 'inspect'}]
+        def run(validator):
+            with self.assertRaises(ValueError):
+                validator(c)
+        self.negative_control(flow.candidate, "require(boundary['signal'] in SIGNALS, "
+                              "'boundary signal: ' + '|'.join(SIGNALS))", run)
+
+    def test_negative_control_repeated_gap_rule(self):
+        guard = "s['attempts'] == 3 or not all(x['novel'] for x in value['gaps'])"
+        def run(advance):
+            s = flow.new(self.root, 'Create a small explicitly invoked formatting skill.')
+            s['ledger'] = [{'id': 'G1', 'perspective': 'p', 'witness': 'w'}]
+            s['attempts'] = 1
+            c = candidate()
+            self.s = s
+            self.stage(c)
+            with contextlib.redirect_stdout(io.StringIO()):
+                advance(self.root, s, c)
+                advance(self.root, s, revise(gap('format', 'G1', novel=False)))
+            self.assertEqual(s['phase'], 'incomplete')
+        import inspect
+        source = inspect.getsource(flow.advance)
+        self.assertIn(guard, source)
+        run(flow.advance)
+        (self.root / flow.STATE).unlink()
+        for record in (self.root / '.agents/artifacts').glob('skill-design-*.md'):
+            record.unlink()
+        namespace = dict(vars(flow))
+        exec(source.replace(guard, "s['attempts'] == 3"), namespace)
+        with self.assertRaises(AssertionError):
+            run(namespace['advance'])
 
 
 def candidate_with_loop():

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit skill authoring. Python 3.11+, POSIX; standard library only."""
+"""Explicit skill workflow-shape design and publication. Python 3.11+, POSIX; standard library only."""
 import argparse
 import ast
 from contextlib import contextmanager
@@ -21,55 +21,65 @@ import uuid
 STATE = Path('.agents/skillflow.json')
 REFS = Path(__file__).resolve().parents[1] / 'references'
 LIMIT = 65536
-LENSES = ('exploration/commitment', 'decision/implementation', 'evidence/inference',
-          'resolved/unresolved', 'author/critic')
+SIGNALS = ('objective', 'reasoning', 'evidence', 'dependency', 'verification')
 PHASE = dict.fromkeys(('id', 'purpose', 'enter', 'close', 'leave', 'discard'), 'task-specific text')
-BOUNDARY = dict.fromkeys(('id', 'how', 'where', 'why', 'rewind'), 'text; rewind is a phase ID')
+BOUNDARY = {'id': 'text', 'signal': '|'.join(SIGNALS), 'handoff': 'artifact the next phase consumes and can challenge',
+            'merged_loss': 'what would be lost if performed together', 'check': 'closure check',
+            'rewind': 'earliest phase ID'}
+GATE = {'id': 'text', 'effect': 'irreversible/external effect', 'approval': 'who approves and how',
+        'phase': 'phase ID gated'}
+LOOP = {'kind': 'progress', 'entry': 'phase ID', 'check': 'what each pass tests',
+        'stop': 'continuation/termination signal, not a count', 'evidence': 'observable finding or output',
+        'rewind': 'phase ID', 'invalidate': 'results a revision makes stale',
+        'exhaustion': 'unresolved uncertainty reported at cap', 'budget': 3}
+EVALUATION = {**LOOP, 'kind': 'evaluation', 'perspectives': ['distinct failure class']}
 DECISION = dict.fromkeys(('id', 'choice', 'basis', 'alternative', 'tradeoff', 'revisit'), 'text')
-LOOP = {**dict.fromkeys(('entry', 'check', 'until', 'evidence', 'rewind', 'invalidate',
-                        'exhaustion'), 'text; entry/rewind are phase IDs'), 'budget': 3}
 CANDIDATE = {
     'status': 'candidate',
     'frame': {**dict.fromkeys(('name', 'description', 'trigger', 'audience', 'outcome',
                                'authority'), 'text'), 'non_goals': [], 'criteria': ['checkable criterion']},
     'workflow': {'fitness': 'task evidence and verification limits', 'phases': [PHASE],
-                 'boundaries': [], 'coverage': dict.fromkeys(LENSES, 'safeguard or n/a: reason'),
-                 'engine': {'mode': 'none', 'reason': 'task evidence'}, 'loops': [], 'decisions': []}}
+                 'boundaries': [], 'gates': [], 'engine': {'mode': 'none', 'reason': 'task evidence'},
+                 'loops': [], 'decisions': []}}
 NEED = {'status': 'need', 'type': 'intent', 'question': 'text', 'witness': 'text', 'consequence': 'text'}
-GAP = {'rewind': 'intent or actual phase ID', 'witness': 'text', 'evidence': 'path:lines or output',
-       'why_earliest': 'text'}
+GAP = {'id': 'new ID, or prior ID if not novel', 'novel': True, 'rewind': 'intent or actual phase ID',
+       'witness': 'text', 'evidence': 'path:lines or output', 'why_earliest': 'text'}
 CHECK = {'choice': 'printed choice', 'witness': 'attempted removal failure', 'evidence': 'path:lines or output'}
-PASS = {'status': 'pass', 'basis': 'local: review limits', 'subtract': [CHECK],
-        'coverage_checks': dict.fromkeys(LENSES, 'counterexample attempt and outcome'),
+RESOLVED = {'id': 'prior gap ID', 'evidence': 'staged path:lines showing fix'}
+PASS = {'status': 'pass', 'perspective': 'failure class hunted', 'basis': 'local: review limits',
+        'resolved': [RESOLVED], 'subtract': [CHECK],
         'defeat': {'case': 'difficult in-scope case', 'witness': 'attempted false pass',
                    'evidence': 'path:lines or output', 'outcome': 'why contained'},
         'tests': 'executed command/output, or n/a: prose paired examples',
         'negative_control': 'observed guard-removal result, or n/a: prose exact lines',
         'limits': 'residual limits; not independent proof'}
+REVISE = {'status': 'revise', 'perspective': 'failure class hunted', 'gaps': [GAP]}
 PROMPTS = {
-    'draft': '''Construct the smallest viable complete skill in STAGE only. Read boundaries.md for workflow shape.
-Frame intent/authority and checkable criteria; distinguish observed facts from assumptions.
-Write the fewest task-specific instructions that prevent a named failure - prefer judgment and
-falsifying questions to procedure, accept a 1-2 sentence skill, and defer detailed
-instruction-quality criteria to review. Stage: SKILL.md with simple frontmatter, optional
-VERSION, references/*.md, assets/, at most one optional Python reference template, and
-scripts/tests only when engine=single-file. Run only authorized tests; record observed output,
-not planned success. Never execute unapproved effects. Need material unsafe facts or user-owned
-intent? Return need. After feedback preserve unaffected decisions and rebuild affected
-decisions/dependents in the new stage. Do not publish yourself.''',
-    'review': '''Challenge the exact staged candidate against the verbatim request and authority.
-Use boundaries.md for subtraction adequacy and authoring.md for instruction quality; record
-the instruction-quality witness in the existing defeat or coverage_checks evidence.
-Attempt every printed subtraction choice: remove phases, merge neighbors, remove loops/engine.
-If simplification remains adequate, return revise and adopt it; do not defend ceremony.
-Try a difficult in-scope case passing all checks while violating goal/authority. Attack each
-lens safeguard or absence reason. Cite exact staged lines/observed outputs. For enforced
-boundaries, report executed guard-removal negative controls; prose uses exact lines and
-paired examples. Tests must be authorized; unsafe unknowns block. A local reviewer shares
-author blind spots: disclose local/delegated basis and residual limits. Never equate JSON
-validation with truth. Surviving material witnesses require revise with earliest affected
-phase (or intent), evidence, and why earliest. Pass only this unchanged tree with concrete
-attempts that did not survive. Review is an attentional boundary, not guaranteed independence.''',
+    'draft': '''Construct the smallest viable complete skill in STAGE only. Read boundaries.md and
+decide workflow shape by marginal value: add a phase, boundary, loop, gate or engine only when
+it materially improves the result, and record what would be lost without it. Frame
+intent/authority and checkable criteria; distinguish observed facts from assumptions. This
+engine owns shape, not prose: for instruction wording apply the semantic-instructions skill
+if installed. Stage: SKILL.md with simple frontmatter, optional VERSION, references/*.md,
+assets/, at most one optional Python reference template, and scripts/tests only when
+engine=single-file. Run only authorized tests; record observed output, not planned success.
+Never execute unapproved effects. Need material unsafe facts or user-owned intent? Return
+need. After feedback preserve unaffected decisions and rebuild affected decisions/dependents
+in the new stage. Do not publish yourself.''',
+    'review': '''Challenge the staged candidate's workflow shape against the verbatim request and
+authority, using boundaries.md. Name your perspective: the failure class you hunt. First
+confirm each ledger gap is fixed, citing staged lines; a ledger gap still present is not novel,
+resubmit it under its ID. Then prefer an unused perspective over repeating one. Attempt every
+printed subtraction choice; for each boundary ask what would be lost if merged. If a simpler
+variant stays adequate, return revise and adopt it; do not defend ceremony. Each loop needs a
+real stop rule, not a count. Irreversible or external effects without an approval gate are a
+gap. Try a difficult in-scope case passing all checks while violating goal/authority. Cite
+exact staged lines/observed outputs. For enforced guards, report executed guard-removal
+negative controls; prose uses exact lines and paired examples. Tests must be authorized;
+unsafe unknowns block. No numeric confidence. Zero findings is not proof: state limits.
+Surviving material witnesses require revise with earliest affected phase (or intent). Pass
+only this unchanged tree. A local reviewer shares author blind spots: disclose
+local/delegated basis.''',
     'resolve': '''Resolve the recorded gap from authorized evidence or ask the user and pause.
 Never invent approval, user intent, or observations. Observe facts with the cheapest safe
 check; assume only with cheap reversal, detection before harm, and a revisit condition.
@@ -127,16 +137,25 @@ def candidate(value):
     boundaries = items(w['boundaries'])
     for boundary in boundaries:
         record(boundary, BOUNDARY)
+        require(boundary['signal'] in SIGNALS, 'boundary signal: ' + '|'.join(SIGNALS))
         require(boundary['rewind'] in ids, 'boundary rewind must name an actual phase')
     unique([b['id'] for b in boundaries])
-    record(w['coverage'], LENSES)
+    for gate in items(w['gates']):
+        record(gate, GATE)
+        require(gate['phase'] in ids, 'gate must name an actual phase')
+    unique([g['id'] for g in w['gates']])
     record(w['engine'], ('mode', 'reason'))
     require(w['engine']['mode'] in ('none', 'single-file'), 'engine mode: none|single-file')
     for loop in items(w['loops']):
-        keys(loop, LOOP)
-        record({k: v for k, v in loop.items() if k != 'budget'}, set(LOOP) - {'budget'})
-        require(type(loop['budget']) is int and 1 <= loop['budget'] <= 20, 'loop budget: 1..20')
+        require(isinstance(loop, dict) and loop.get('kind') in ('evaluation', 'progress'),
+                'loop kind: evaluation|progress')
+        keys(loop, EVALUATION if loop['kind'] == 'evaluation' else LOOP)
+        record({k: v for k, v in loop.items() if k not in ('budget', 'perspectives')}, set(LOOP) - {'budget'})
+        require(type(loop['budget']) is int and 1 <= loop['budget'] <= 20, 'loop budget: 1..20 safety cap')
         require(loop['entry'] in ids and loop['rewind'] in ids, 'loop phase ID missing')
+        if loop['kind'] == 'evaluation':
+            require(all(text(x) for x in items(loop['perspectives'], empty=False)), 'evaluation loop needs perspectives')
+            unique(loop['perspectives'])
     for decision in items(w['decisions']):
         record(decision, DECISION)
         require(re.match(r'(observed|documented|assumed):\s*\S', decision['basis']), 'decision basis must be labeled')
@@ -147,17 +166,33 @@ def choices(c):
     w = c['workflow']
     ids = [p['id'] for p in w['phases']]
     return ([f'phase:{p}' for p in ids] + [f'merge:{a}:{b}' for a, b in zip(ids, ids[1:])]
+            + [f'boundary:{b["id"]}' for b in w['boundaries']]
             + [f'loop:{i}' for i in range(len(w['loops']))]
             + (['engine'] if w['engine']['mode'] == 'single-file' else []))
 
 
-def review(value, c):
+def gap_id(value):
+    return isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,32}', value)
+
+
+def gap(value, ids):
+    keys(value, GAP)
+    record({k: v for k, v in value.items() if k != 'novel'}, set(GAP) - {'novel'})
+    require(gap_id(value['id']) and type(value['novel']) is bool, 'gap needs ID and boolean novel')
+    require(value['rewind'] in ['intent'] + ids, 'rewind must name intent or actual phase')
+
+
+def review(value, c, ledger=()):
     keys(value, PASS)
     require(value['status'] == 'pass', 'invalid review status')
-    for field in ('basis', 'tests', 'negative_control', 'limits'):
+    for field in ('perspective', 'basis', 'tests', 'negative_control', 'limits'):
         require(text(value[field]), f'{field} required')
     require(value['basis'].startswith(('local:', 'delegated:')), 'disclose local/delegated review')
-    record(value['coverage_checks'], LENSES)
+    for item in items(value['resolved'], maximum=128):
+        record(item, RESOLVED)
+    cited = [x['id'] for x in value['resolved']]
+    unique(cited)
+    require(set(cited) == set(ledger), 'pass must cite every ledger gap as resolved')
     record(value['defeat'], PASS['defeat'])
     for check in items(value['subtract'], empty=False, maximum=128):
         record(check, CHECK)
@@ -320,8 +355,8 @@ def save(root, s):
 
 def new(root, request, selected=''):
     ticket = uuid.uuid4().hex
-    return {'version': 1, 'root': str(root), 'request': request, 'target': selected,
-            'ticket': ticket, 'phase': 'draft', 'attempts': 0, 'resolutions': [], 'feedback': [],
+    return {'version': 2, 'root': str(root), 'request': request, 'target': selected,
+            'ticket': ticket, 'phase': 'draft', 'attempts': 0, 'resolutions': [], 'feedback': [], 'ledger': [],
             'candidate': None, 'stage': f'.agents/artifacts/skill-spec-{ticket}', 'tree_hash': '',
             'review': None, 'open': None, 'previous': None, 'tests_authorized': False,
             'test_run': None, 'record': '', 'record_hash': ''}
@@ -329,7 +364,7 @@ def new(root, request, selected=''):
 
 def validate(root, s):
     keys(s, new(root, 'validation'))
-    require(s['version'] == 1 and type(s['version']) is int and s['root'] == str(root), 'unsupported/legacy state or root mismatch')
+    require(s['version'] == 2 and type(s['version']) is int and s['root'] == str(root), 'unsupported/legacy state or root mismatch')
     require(text(s['request']) and re.fullmatch(r'[0-9a-f]{32}', s['ticket']), 'invalid request/ticket')
     require(type(s['attempts']) is int and 0 <= s['attempts'] <= 3, 'invalid revise count')
     require(s['phase'] in ('draft', 'review', 'resolve', 'blocked', 'publishing', 'complete', 'incomplete'), 'invalid state phase')
@@ -340,10 +375,13 @@ def validate(root, s):
         keys(s['previous'], ('candidate', 'stage'))
         candidate(s['previous']['candidate'])
         stage(root, s['previous'])
-    for gap in items(s['feedback']):
-        record(gap, GAP)
-        require(s['previous'] is not None and gap['rewind'] in ['intent'] +
-                [p['id'] for p in s['previous']['candidate']['workflow']['phases']], 'invalid saved rewind')
+    for item in items(s['feedback']):
+        require(s['previous'] is not None, 'feedback requires previous candidate')
+        gap(item, [p['id'] for p in s['previous']['candidate']['workflow']['phases']])
+    for item in items(s['ledger'], maximum=128):
+        record(item, ('id', 'perspective', 'witness'))
+        require(gap_id(item['id']), 'invalid ledger ID')
+    unique([x['id'] for x in s['ledger']])
     require(isinstance(s['target'], str), 'invalid target')
     if s['target'] or s['candidate']:
         target(root, s)
@@ -359,7 +397,7 @@ def validate(root, s):
     require(type(s['tests_authorized']) is bool and (not s['tests_authorized'] or phase == 'publishing'),
             'test authorization/phase mismatch')
     if phase == 'publishing':
-        review(s['review'], s['candidate'])
+        review(s['review'], s['candidate'], [x['id'] for x in s['ledger']])
         require(s['candidate']['workflow']['engine']['mode'] == 'none' or s['tests_authorized'],
                 'single-file publication requires explicit test authorization')
     if s['test_run'] is not None:
@@ -375,7 +413,7 @@ def validate(root, s):
             else not s['record'] and not s['record_hash'], 'record/phase mismatch')
     if finished:
         require(s['record'] == f'.agents/artifacts/skill-design-{s["ticket"]}.md', 'invalid record path')
-    require((s['attempts'] == 3) == (phase == 'incomplete'), 'revise budget/phase mismatch')
+    require(s['attempts'] < 3 or phase == 'incomplete', 'revise cap/phase mismatch')
     require(not finished or s['previous'] is None, 'finished state must compact previous candidate')
 
 
@@ -391,20 +429,23 @@ def draft_again(s):
              stage=f'.agents/artifacts/skill-spec-{s["ticket"]}')
 
 
-def design_record(root, s, status):
+def design_record(root, s, status, unresolved=()):
     path = safe(root / f'.agents/artifacts/skill-design-{s["ticket"]}.md')
-    content = f'# Skill design: {status.upper()}\n\nAgent-supplied evidence; no independent semantic certification.\n\n```json\n{json.dumps(s, indent=2)}\n```\n'
+    open_gaps = ''.join(f'- {g["id"]}: {g["witness"]}\n' for g in unresolved)
+    content = (f'# Skill design: {status.upper()}\n\nAgent-supplied evidence; no independent semantic certification.\n\n'
+               + (f'## Unresolved\n\n{open_gaps}\n' if open_gaps else '')
+               + f'```json\n{json.dumps(s, indent=2)}\n```\n')
     require(not path.exists() or path.read_text() == content, 'design record mismatch; refusing overwrite')
     return path, content
 
 
-def finish(root, s, status):
-    path, content = design_record(root, s, status)
+def finish(root, s, status, unresolved=()):
+    path, content = design_record(root, s, status, unresolved)
     if not path.exists():
         atomic(path, content)
     s.update(phase=status, record=str(path.relative_to(root)), record_hash=hashlib.sha256(content.encode()).hexdigest(),
              candidate=None, review=None, open=None, previous=None, tests_authorized=False,
-             test_run=None, feedback=[], resolutions=[])
+             test_run=None, feedback=[], resolutions=[], ledger=[])
     save(root, s)
 
 
@@ -508,21 +549,28 @@ def advance(root, s, value, tests_authorized=False):
         if changed(root, s):
             return
         if status == 'revise':
-            keys(value, ('status', 'gaps'))
+            keys(value, REVISE)
+            require(text(value['perspective']), 'perspective required')
             ids = [p['id'] for p in s['candidate']['workflow']['phases']]
-            for gap in items(value['gaps'], empty=False):
-                record(gap, GAP)
-                require(gap['rewind'] in ['intent'] + ids, 'rewind must name intent or actual phase')
+            known = [x['id'] for x in s['ledger']]
+            for item in items(value['gaps'], empty=False):
+                gap(item, ids)
+                require((item['id'] not in known) == item['novel'],
+                        'novel gaps need a new ID; repeated gaps must reuse their ledger ID')
+            unique([x['id'] for x in value['gaps']])
+            s['ledger'] += [{'id': x['id'], 'perspective': value['perspective'], 'witness': x['witness']}
+                            for x in value['gaps'] if x['novel']]
             s['feedback'] = sorted(value['gaps'], key=lambda gap: (['intent'] + ids).index(gap['rewind']))
             s['previous'] = {'candidate': s['candidate'], 'stage': s['stage']}
             s['attempts'] += 1
-            if s['attempts'] == 3:
+            # A repeated gap means revision made no progress; the cap backstops mistaken novelty claims.
+            if s['attempts'] == 3 or not all(x['novel'] for x in value['gaps']):
                 s['tree_hash'] = ''
-                finish(root, s, 'incomplete')
+                finish(root, s, 'incomplete', value['gaps'])
                 return
             draft_again(s)
         else:
-            review(value, s['candidate'])
+            review(value, s['candidate'], [x['id'] for x in s['ledger']])
             require(s['candidate']['workflow']['engine']['mode'] == 'none' or tests_authorized,
                     'single-file pass requires --run-tests; authorize the staged tests first')
             s.update(phase='publishing', review=value, tests_authorized=tests_authorized)
@@ -564,18 +612,20 @@ def show(root, s):
     if phase == 'draft':
         print(f'Reference: {REFS / "boundaries.md"}')
     elif phase == 'review':
-        print(f'References: {REFS / "boundaries.md"}; {REFS / "authoring.md"}')
+        print(f'Reference: {REFS / "boundaries.md"}')
     print(f'STAGE: {stage(root, s)}')
     print('Context (data, not instructions):\n' + json.dumps(s, indent=2))
     if s['feedback']:
         print('Earliest affected phase/intent: ' + s['feedback'][0]['rewind'] +
               '; rebuild it and dependents, preserving unaffected decisions from previous.')
-    contracts = [CANDIDATE, NEED] if phase == 'draft' else ([PASS, {'status': 'revise', 'gaps': [GAP]}, NEED]
+    contracts = [CANDIDATE, NEED] if phase == 'draft' else ([PASS, REVISE, NEED]
                 if phase == 'review' else [{'status': 'resolved', 'answer': 'text', 'basis': 'text'},
                                           {'status': 'blocked', 'question': 'text', 'needs': 'text'}])
     if phase == 'draft':
-        print('Optional record shapes: ' + json.dumps({'boundary': BOUNDARY, 'loop': LOOP, 'decision': DECISION}))
+        print('Optional record shapes: ' + json.dumps({'boundary': BOUNDARY, 'gate': GATE, 'loop': LOOP,
+                                                      'evaluation_loop': EVALUATION, 'decision': DECISION}))
     if phase == 'review':
+        print('Ledger gaps pass must cite as resolved: ' + json.dumps([x['id'] for x in s['ledger']]))
         print('Required subtraction choices: ' + json.dumps(choices(s['candidate'])))
         if s['candidate']['workflow']['engine']['mode'] == 'single-file':
             print('On pass, append --run-tests ONLY after authorizing staged unittest execution. Not sandboxed.')

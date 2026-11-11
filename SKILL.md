@@ -1,6 +1,6 @@
 ---
 name: workflows-as-skills
-description: Create and publish an explicitly invoked agent skill from a request. Synthesize the smallest viable task-specific workflow, with optional phases, persistence, and challenge loops.
+description: Design and publish an explicitly invoked agent skill whose workflow shape earns its cost. Decide and challenge cognitive boundaries, verification loops, stop rules, approval gates and engine need; instruction prose belongs to semantic-instructions.
 disable-model-invocation: true
 compatibility: Python 3.11+ on POSIX
 ---
